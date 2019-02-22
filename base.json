@@ -1,0 +1,46 @@
+{
+  "variables": {
+  },
+  "builders": [
+    {
+      "type" : "amazon-ebs",
+      "ami_name": "chromium-builder.{{timestamp}}",
+      "region" : "us-east-2",
+      "instance_type" : "c5.xlarge",
+      "spot_price": "0.1",
+      "block_duration_minutes": 60,
+      "source_ami_filter": {
+        "most_recent": true,
+        "filters": {
+          "name": "ubuntu/images/hvm-ssd/ubuntu-bionic-18.04-amd64-server-*",
+          "virtualization-type": "hvm",
+          "root-device-type": "ebs"
+        },
+        "owners": ["099720109477"]
+      },
+      "launch_block_device_mappings": [
+        {
+          "device_name": "/dev/sda1",
+          "volume_size": 40,
+          "volume_type": "gp2",
+          "delete_on_termination": true
+        }
+      ],
+      "ssh_username" : "ubuntu"
+    }
+  ],
+  "provisioners": [
+    {
+      "type": "shell",
+      "inline": [
+        "while ! systemctl is-active cloud-init.target; do sleep 1; done"
+      ]
+    },
+    {
+      "type": "shell",
+      "scripts": [
+        "scripts/prepare.sh"
+      ]
+    }
+  ]
+}

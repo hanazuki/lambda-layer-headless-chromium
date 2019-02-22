@@ -1,0 +1,60 @@
+{
+  "variables": {
+  },
+  "builders": [
+    {
+      "type" : "amazon-ebsvolume",
+      "region" : "us-east-2",
+      "instance_type" : "m5a.large",
+      "spot_price": "auto",
+      "spot_price_auto_product": "Linux/UNIX (Amazon VPC)",
+      "source_ami_filter": {
+        "most_recent": true,
+        "filters": {
+          "name": "ubuntu/images/hvm-ssd/ubuntu-bionic-18.04-amd64-server-*",
+          "virtualization-type": "hvm",
+          "root-device-type": "ebs"
+        },
+        "owners": ["099720109477"]
+      },
+      "ebs_volumes": [
+        {
+          "device_name": "/dev/sda1",
+          "volume_size": 20,
+          "volume_type": "gp2",
+          "delete_on_termination": true
+        }
+      ],
+      "ssh_username" : "ubuntu"
+    }
+  ],
+  "provisioners": [
+    {
+      "type": "shell",
+      "inline": ["mkdir -p src out"]
+    },
+    {
+      "type": "file",
+      "source": "./src/",
+      "destination": "~/src"
+    },
+    {
+      "type": "file",
+      "source": "./out/",
+      "destination": "~/out"
+    },
+    {
+      "type": "shell",
+      "scripts": [
+        "scripts/prepare-package.sh",
+        "scripts/package.sh"
+      ]
+    },
+    {
+      "type": "file",
+      "direction": "download",
+      "source": "~/dist/",
+      "destination": "."
+    }
+  ]
+}

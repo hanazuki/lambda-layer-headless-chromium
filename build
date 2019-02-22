@@ -1,0 +1,104 @@
+#!/usr/bin/env ruby
+require 'json'
+require 'open-uri'
+require 'optparse'
+require 'securerandom'
+
+require 'aws-sdk-lambda'
+require 'aws-sdk-s3'
+
+options = {
+  channel: 'stable',
+  force_rebuild: false,
+  force_update: false,
+  build_region: nil,
+  deploy_regions: nil,
+  s3_bucket: 'exapico-chrome-artifacts',
+  iam_instance_profile: 'ec2-chromium-builder',
+  deploy_s3_bucket: 'exapico-lambda-deploy-%',
+}
+OptionParser.new do |o|
+  o.on('-f', '--force-update') {|v| options[:force_update] = v }
+  o.on('-F', '--force-rebuild') {|v| options[:force_rebuild] = v }
+  o.on('-c', '--channel CHANNEL') {|v| options[:channel] = v }
+  o.on('-r REGION', '--build-region') {|v| options[:build_region] = v }
+  o.on('-d REGIONS', '--deploy-regions') {|v| (options[:deploy_regions] ||= []).concat(v.split(?,)) }
+
+  o.parse!(ARGV)
+end
+options[:build_region] ||= ENV.fetch('AWS_DEFAULT_REGION')
+options[:deploy_regions] ||= [ENV.fetch('AWS_DEFAULT_REGION')]
+
+versions = JSON.parse(open('https://omahaproxy.appspot.com/all.json?os=linux', &:read))
+current_version = versions.find {|h| h['os'] == 'linux' }['versions'].find {|h| h['channel'] == options[:channel ] }['version']
+
+puts <<EOF
+- Channel: #{options[:channel]}
+- Current: #{current_version}
+EOF
+
+layer_name = "headless-chromium-#{options[:channel]}"
+s3 = Aws::S3::Resource.new(region: options[:build_region])
+
+options[:deploy_regions].each do |deploy_region|
+  lambda = Aws::Lambda::Client.new(region: deploy_region)
+
+  layer_versions = [].tap do |l|
+    marker = nil
+    begin
+      res = lambda.list_layer_versions(layer_name: layer_name, marker: marker)
+      l.concat(res.layer_versions)
+      marker = res.next_marker
+    end while marker
+  end
+
+  unless layer_versions.empty?
+    deployed_version = layer_versions.max_by(&:version).description.split(?\s).first
+  end
+
+  puts "- Deployed (#{deploy_region}): #{deployed_version || 'none'}"
+
+  unless options[:force_update] || deployed_version != current_version
+    next
+  end
+
+  artifact_key = "#{options[:channel]}/headless-chromium-#{current_version}.zip"
+  artifact  = s3.bucket(options[:s3_bucket]).object(artifact_key)
+
+  if options[:force_rebuild] || !artifact.exists?
+    cmd = %W[
+      packer build
+      -var channel=#{options[:channel]}
+      -var version=#{current_version}
+      -var s3_bucket=#{options[:s3_bucket]}
+      -var iam_instance_profile=#{options[:iam_instance_profile]}
+      #{File.join(__dir__, 'build.json')}
+    ]
+    unless system(*cmd)
+      exit 1
+    end
+    options[:force_rebuild] = false
+  end
+
+  puts "Deploying to #{deploy_region}"
+
+  deploy_bucket = Aws::S3::Resource.new(region: deploy_region).bucket(options[:deploy_s3_bucket].sub(?%, deploy_region))
+  unless deploy_bucket.exists?
+    deploy_bucket.create(acl: 'private', create_bucket_configuration: {location_constraint: deploy_region})
+  end
+  obj = deploy_bucket.object(SecureRandom.hex(16)).tap {|o| o.copy_from(artifact) }
+  begin
+    res = lambda.publish_layer_version(
+      layer_name: layer_name,
+      description: "#{current_version}",
+      content: {
+        s3_bucket: obj.bucket.name,
+        s3_key: obj.key,
+      },
+    )
+  ensure
+    obj.delete
+  end
+
+  puts "Deployed #{res.layer_version_arn}"
+end

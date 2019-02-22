@@ -1,0 +1,5 @@
+#!/bin/bash
+export HOME=$(mktemp -d)
+PREFIX="$(dirname "${BASH_SOURCE[0]}")"/..
+export FONTCONFIG_FILE="$PREFIX"/lib/chromium/fonts.conf
+exec "$PREFIX"/lib/chromium/headless_shell --no-sandbox --disable-dev-shm-usage "$@"
